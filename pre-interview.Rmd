@@ -1,0 +1,166 @@
+---
+title: "Upstart Pre-Interview Question"
+author: "Joe Silverstein"
+date: "12/29/2016"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(data.table)
+library(acepack)
+library(zoo)
+setwd("~/Google Drive/Jobs/Upstart/")
+dt = fread("loan_data.csv")
+```
+
+## (1) Relationship Between FICO Score and Interest Rate
+
+```{r, echo=TRUE}
+dt$fico_midpoint = (dt$fico_range_low + dt$fico_range_high) / 2
+dt$int_rate = as.numeric(sub("%", "", dt$int_rate)) / 100
+cor(dt$int_rate, dt$fico_midpoint)
+```
+
+The Pearson correlation between the approximate FICO score (midpoint between upper and lower bounds) and the interest rate is -0.425. Thus, as intuitively expected, the interest rate typically goes down as the FICO score goes up. I say "typically" because they are not deterministically related, so they are not actually inversely proportional and there could theoretically be particular cases in which the interest rate goes up with the FICO score. At -0.425, the relationship between the two variables is moderately strong, although clearly the FICO score is just one of potentially many predictors of the interest rate.
+
+```{r, echo = FALSE}
+# Plot random sample of observations to avoid seeing noise:
+sampledt = dt[sample(.N, 100)]
+plot(sampledt$fico_midpoint, sampledt$int_rate, xlab = "FICO Score", ylab = "Interest Rate", main = "Interest Rate vs. FICO Score (Random Sample)", pch = ".")
+```
+
+The plot reveals that the true relationship is clearly non-linear, so the Pearson correlation coefficient does not accurately measure the degree of association between the two variables. Moreover, it is not clear from the plot what function the relationship actually takes. If we postulate that the relationship is monotonic (which it is not clear from the plot that it is), we can measure the amount of association using the Spearman rank coefficient:
+
+```{r}
+cor(dt$int_rate, dt$fico_midpoint, method = "spearman")
+```
+
+As we can see, it is almost the same as before, although slightly more negative due to the relaxation of the linearity restriction.
+
+To find a more precise non-linear relationship in the data without assuming anything about the functional form of the relationship, we can use the Alternating Conditional Expectations (ACE) algorithm to estimate the maximal correlation, which is defined as
+
+$$
+mCor(X,Y) = \mathrm{min}_{f,g}\ Cor(f(X),g(Y))
+$$
+
+
+```{r}
+argmax = ace(dt$int_rate, dt$fico_midpoint)
+cor(argmax$tx, argmax$ty)
+```
+
+This coefficient is significantly higher than the absolute values of either the Pearson or Spearman coefficients, so there exists a relationship between the two variables that is stronger than any linear or monotic relationship. The non-linear function that most closely relates the two variables is $g(FICO) = f(int\_rate)$, where f and g are the following functions:
+
+```{r, echo = FALSE}
+f = plot(argmax$x[order(argmax$x)], argmax$tx[order(argmax$x)], main = "f", xlab = "Interest Rate", ylab = "f(Interest Rate)", pch = ".", type = "l")
+g = plot(argmax$y[order(argmax$y)], argmax$ty[order(argmax$y)], main = "g", xlab = "FICO Score", ylab = "g(FICO Score)", pch = ".", type = "l")
+```
+
+Since g is approximately linear, we can closely approximate the above relationship by $FICO = f(int\_rate)$.
+
+Note that the above relationship is the particular one observed in this dataset, and should not be expected to generalize to new datasets. However, the question asked what is the relationship between FICO score and interest rate in THIS dataset.
+
+## (2) Relationship Between Loan Size and Interest Rate
+
+```{r, echo=TRUE}
+cor(dt$loan_amnt, dt$int_rate)
+```
+
+The correlation between the loan size and the interest rate is -0.0948, so the interest rate typically goes down as the loan size goes up.
+
+As before, applying the ACE algorithm allows arbitrary functional relationships between the variables. 
+
+```{r}
+argmax = ace(dt$int_rate, dt$loan_amnt)
+cor(argmax$tx, argmax$ty)
+```
+
+The higher absolute value of the correlation indicates that the non-linear relationship found by ACE is much stronger than the linear one. It is plotted below:
+
+```{r, echo = FALSE}
+f = plot(argmax$x[order(argmax$x)], argmax$tx[order(argmax$x)], main = "f", xlab = "Interest Rate", ylab = "f(Interest Rate)", pch = ".", type = "l")
+g = plot(argmax$y[order(argmax$y)], argmax$ty[order(argmax$y)], main = "g", xlab = "Loan Amount", ylab = "g(Loan Amount)", pch = ".", type = "l")
+```
+
+The relationship between loan size and interest rate in this dataset is approximately $g(loan\_amnt) = f(int\_rate)$, where f and g are the functions shown above. Again, this is only the relationship between them in THIS dataset, and should not be expected to generalize well to new datasets due to overfitting.
+
+## (3)
+
+```{r, include = FALSE}
+charged_off = subset(dt, loan_status == "Charged Off")
+not_charged_off = subset(dt, loan_status != "Charged Off")
+summary(charged_off$loan_amnt)
+summary(not_charged_off$loan_amnt)
+summary(charged_off$fico_midpoint)
+summary(not_charged_off$fico_midpoint)
+```
+
+Using t-tests, I can check whether the means of the loan amount and the FICO score are significantly different for charged off vs. non-charged off loans:
+
+```{r, echo = FALSE}
+t.test(charged_off$loan_amnt, not_charged_off$loan_amnt)
+t.test(charged_off$fico_midpoint, not_charged_off$fico_midpoint)
+```
+
+The 95% confidence intervals of both of the above tests do not contain 0, so I  conclude that both the size of the loan and the borrower's FICO score are related to whether the loan ends up being charged off. The results of the t-test tell us that this conclusion is very likely to generalize to a new dataset. 
+
+This relates to the previous question if you think about how the size of the loan and the FICO score affect the terms of the loan. The terms of the loan are the maturity and the interest rate, but from question (5) we know that the maturity is always 3 years. Intuitively, the FICO score and the loan size should affect whether the loan gets charged off through the interest rate. I can test this hypothesis by performing the t-test as above, but using the interest rate instead:
+
+```{r, echo = FALSE}
+t.test(charged_off$int_rate, not_charged_off$int_rate)
+```
+
+The t-test reveals that the interest rate on charged-off loans is significantly higher than the interest rate on charged-off loans (assuming that the interest rate is fixed throughout the term of the loan). Thus, we can conclude that the FICO score and the loan size affect the interest rate, which in turn affects whether or not the loan gets charged off. Note that this relationship is predictive but is not guaranteed to be causal.
+
+## (4) Percentage of Loans Charged Off By October 2015
+
+```{r}
+payment_statuses = table(dt$loan_status)
+print(payment_statuses["Charged Off"] / sum(payment_statuses))
+```
+
+0.704%.
+
+## (5) 
+
+I first need to know the distribution of the number of months since issuance for the loans that have been charged off:
+
+```{r, echo = FALSE}
+dt$mons_issuance_to_last_payment = round(12 * (as.yearmon(dt$last_pymnt_d) - as.yearmon(dt$issue_d)))
+charged_off = subset(dt, loan_status == "Charged Off")
+# Code loans with no payments as 0:
+charged_off$mons_issuance_to_last_payment[is.na(charged_off$mons_issuance_to_last_payment)] = 0
+hist(charged_off$mons_issuance_to_last_payment, main = "Charged-Off Loans:\nMonths From Issuance to Last Payment", xlab = "Number of Months", ylab = "Number of Loans")
+```
+
+Based on the histogram above, it is not clear what the distribution of the number of months from issuance to last payment for charged off loans is. However, it looks like it is approximately uniform at lower month counts. I also don't know how often the loans have to be paid or how long of a grace period there is before they are considered "Charged Off." Because of this, it is unclear whether there really is a sharp drop-off in the number of charged off loans starting at 6 months in or whether this is actually just an artifact of the sample being cut off at October 2015. Even if there were a drop-off, it is unknown whether the distribution picks up again after more months elapse. For this reason, I will just assume that the true distribution remains uniform throughout the duration of the loans.
+
+I will also assume that macroeconomic conditions remain the same throughout the rest of the terms of the loans, because macroeconomic conditions are very difficult to predict in advance (although I do have a PhD-level economics background, so could provide insights on this if hired).
+
+I calculate the probability that a randomly chosen loan will be charged off as
+
+$$
+Pr\{\text{charged off}\} = \sum_{t=1}^{12} { \left(\text{fraction issued t months ago}\right) \cdot Pr\{\text{charged off} \mid \text{issued t months ago}\} \cdot \left(\frac{36}{t}\right) }
+$$
+
+```{r, include = FALSE}
+dt$mons_since_issuance = round(12 * (as.yearmon("Oct 2015") - as.yearmon(dt$issue_d)))
+table(dt$mons_since_issuance)
+(loan_age_proportions = table(dt$mons_since_issuance) / nrow(dt))
+crosstab = addmargins(table(dt$mons_since_issuance, dt$loan_status), 2)
+(charged_off_prob_by_mon = (crosstab / crosstab[, "Sum"])[, "Charged Off"])
+
+sum = 0
+for (t in 1:12) {
+  sum = sum + loan_age_proportions[t] * charged_off_prob_by_mon[t] * (36 / t)
+}
+print(sum)
+```
+
+Based on these assumptions and this formula, the probability that a randomly chosen loan would eventually be charged off is 2.6%.
+
+
